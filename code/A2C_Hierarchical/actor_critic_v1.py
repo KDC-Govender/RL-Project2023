@@ -141,7 +141,7 @@ class ActorCritic(nn.Module):
 
     def forward(self, state):
 
-        state = format(state)
+        state = format_state(state)
         
         # Transform the glyph and state arrays into tensors 
         glyphs_t  = torch.from_numpy(state["glyphs"]).float().to(device)
