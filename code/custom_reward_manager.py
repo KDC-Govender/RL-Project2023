@@ -1,4 +1,9 @@
-# Adapted from minihack.reward_manager
+# --------------- Adapted from minihack.reward_manager --------------- 
+# 
+# -- Changes to the RewardManager and check_episode_end_call
+# -- Addition of 3x new event types
+# 
+
 # Copyright (c) Facebook, Inc. and its affiliates.
 from __future__ import annotations
 
@@ -103,8 +108,6 @@ class Event(ABC):
 
 
 def _standing_on_top(env, location, past_cells=[]):
-    # print(f"Checking for {location}")
-    # print(past_cells)
     return location in past_cells and not env.screen_contains(location)
 
 
@@ -182,9 +185,6 @@ class LocEvent(Event):
 
     def check(self, env, previous_observation, action, observation, past_cells=[]) -> float:
         del previous_observation, action, observation
-        # print(f"Checking LocEvent")
-        # print(self.loc)
-        # print(past_cells)
         if _standing_on_top(env, self.loc, past_cells):
             return self._set_achieved()
         return 0.0
@@ -731,44 +731,24 @@ class RewardManager(AbstractRewardManager):
             than the object).
         """
 
-        # print(f"Checking for {name} in v2")
-        # print(past_cells)
         return name in past_cells and not env.screen_contains(name)
 
     def check_episode_end_call(
         self, env, previous_observation, action, observation
     ) -> bool:
-        # Override rewards with Aborted or Dead states
-        # if
-        # StepStatus.ABORTED
-        # print("REWARD MANAGER - check_episode_end_call")
-        # print(env.__dict__['_steps'])
-        # print(env.__dict__['reward_lose'])
-        # if env.__dict__['_steps'] == env.__dict__['_max_episode_steps']:
-        #   print("ABORTED")
-        #   self._reward = env.__dict__['reward_lose']
-        #   return True
-
         reward = 0.0
-        # print(reward)
         for event in self.events:
             if event.achieved:
                 continue
             reward += event.check(
                 env, previous_observation, action, observation, self.past_cells
             )
-            # print(event)
-            # print(reward)
 
         for custom_reward_function in self.custom_reward_functions:
             reward += custom_reward_function(
                 env, previous_observation, action, observation
             )
-            # print(custom_reward_function)
-            # print(reward)
-        # self._reward += reward
-        # print("updating past cells")
-        # print(env.get_neighbor_descriptions())
+        # ADDITION of neighbouring cells
         self.past_cells = env.get_neighbor_descriptions()
         self._reward = reward
         return self._check_complete()
@@ -791,7 +771,6 @@ class RewardManager(AbstractRewardManager):
         return result
 
     def collect_reward(self) -> float:
-        # print(f"COLLECTING REWARD - {self._reward}")
         result = self._reward
         self._reward = 0.0
         return result
@@ -824,7 +803,7 @@ class InventoryEvent(Event):
         self.inv_item = inv_item
 
     def check(self, env, previous_observation, action, observation, past_cells=[]) -> float:
-        # del previous_observation, action, observation
+        del previous_observation, action, observation
         inventory_items = observation[env._original_observation_keys.index("inv_strs")]
         for inv_item in inventory_items:
           if self.inv_item in inv_item[: np.where(inv_item == 0)[0][0]].tobytes().decode("utf-8"):
@@ -853,11 +832,41 @@ class RelativeCoordEvent(Event):
         self.current_coordinates = None
 
     def check(self, env, previous_observation, action, observation, past_cells=[]) -> float:
+        del previous_observation, observation
         coordinates = tuple(observation[env._blstats_index][:2])
         if self.current_coordinates is None:
             self.current_coordinates = coordinates
             return 0.0
         if self.current_coordinates[0] < coordinates[0]:
             self.current_coordinates = coordinates
+            return self._set_achieved()
+        return 0.0
+    
+class NeighbourEvent(Event):
+    """An event which checks whether an item is next to the agent."""
+
+    def __init__(self, *args, item_search: str):
+        super().__init__(*args)
+        """Initialise the Event.
+
+        Args:
+            item_search (str):
+                The name of the item that should be next to the agent.
+            reward (float):
+                The reward for the event occuring
+            repeatable (bool):
+                Whether the event can occur repeated (i.e. if the reward can be
+                collected repeatedly
+            terminal_required (bool):
+                Whether this event is required for the episode to terminate.
+            terminal_sufficient (bool):
+                Whether this event causes the episode to terminate on its own.
+        """
+        self.item_search = item_search
+
+    def check(self, env, previous_observation, action, observation, past_cells=[]) -> float:
+        del previous_observation, observation
+        neighbour_cells = env.get_neighbor_descriptions()
+        if self.item_search in neighbour_cells:
             return self._set_achieved()
         return 0.0
