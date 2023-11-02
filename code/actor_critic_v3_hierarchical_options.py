@@ -167,6 +167,8 @@ class ActorCritic(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, state, neighbor_descriptions, neighbor_directions):
+        # Format state
+        state = format_state(state)
 
         # Transform the glyph and state arrays into tensors
         glyphs_t  = torch.from_numpy(state["glyphs"]).float().to(device)
@@ -285,7 +287,7 @@ def actor_critic(env, model, seed, learning_rate, number_episodes, max_episode_l
 
     for i in range(number_episodes):
         # Reset environment
-        state = format_state(env.reset())
+        state = env.reset()
         neighbor_descriptions = env.get_neighbor_descriptions()
         mapped_descriptions = np.array(map_descriptions(my_dict, neighbor_descriptions))
         mapped_descriptions = mapped_descriptions.reshape((1,len(mapped_descriptions)))
