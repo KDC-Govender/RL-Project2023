@@ -14,10 +14,6 @@ import torch
 from nle.nethack import CompassDirection
 from custom_reward_manager import RewardManager, InventoryEvent, MessageEvent
 
-# REQUIREMENTS:
-# Ensure you have the required libraries installed by running:
-# pip install pygame opencv-python minihack
-
 # Function to scale an observation to a new size using Pygame
 def scale_observation(observation, new_size):
     """
@@ -128,7 +124,7 @@ def visualize(env, agent, pygame_frame_rate, video_frame_rate, save_dir, max_tim
     )
 
 class CustomPolicy:
-
+    """Class to load stored policy."""
     def __init__(self, policy_file, actions):
         modelA = ActorCritic(h_size=512, a_size=len(actions))
         optimizerA = torch.optim.Adam(modelA.parameters(), lr=0.02)
@@ -153,48 +149,11 @@ class CustomPolicy:
 if __name__ == "__main__":
 
     MOVE_ACTIONS = tuple(CompassDirection)
-    # NAVIGATE_ACTIONS = MOVE_ACTIONS + (
-    #     nethack.Command.OPEN,
-    #     nethack.Command.KICK,
-    #     nethack.Command.SEARCH,
-    #     nethack.Command.FIGHT,
-    # )
-
-    # QUEST_ACTIONS = NAVIGATE_ACTIONS + (
-    #     nethack.Command.PICKUP,
-    #     nethack.Command.APPLY,
-    #     nethack.Command.PUTON,
-    #     nethack.Command.WEAR,
-    #     nethack.Command.QUAFF,
-    #     nethack.Command.FIRE,
-    #     nethack.Command.RUSH,
-    #     nethack.Command.ZAP,
-    # )
-
-    reward_manager = RewardManager()
-    reward_manager.add_event(InventoryEvent(1, False, True, False, inv_item="potion"))
-    reward_manager.add_event(InventoryEvent(1, False, True, False, inv_item="wand"))
-    reward_manager.add_event(MessageEvent(1, False, True, False, messages=["You start to float in the air!"]))
-    reward_manager.add_coordinate_event((0,0), reward=-5, terminal_required = False) # For Death
-    # Final Reward
-    reward_manager.add_location_event("staircase down", reward = 1000, repeatable = False, terminal_required = True, terminal_sufficient=True)
-    # reward_manager.add_coordinate_event((11,28), reward = 10, terminal_required = False)
-    # reward_manager.add_coordinate_event((11,38), reward = 10, terminal_required = False)
-
-    # Custom Rewards for long corridors at top and bottom 
-    reward_manager.add_coordinate_event((3,27), reward = -2, terminal_required = False)
-    reward_manager.add_coordinate_event((3,28), reward = -2, terminal_required = False)
-    reward_manager.add_coordinate_event((3,29), reward = -2, terminal_required = False)
-
-    reward_manager.add_coordinate_event((19,27), reward = -2, terminal_required = False)
-    reward_manager.add_coordinate_event((19,28), reward = -2, terminal_required = False)
-    reward_manager.add_coordinate_event((19,29), reward = -2, terminal_required = False)
-
 
     env = gym.make(
         "MiniHack-Quest-Hard-v0",
         observation_keys=["glyphs", "pixel", "message", "pixel_crop", "glyphs_crop", "blstats", "inv_strs"],
-        reward_manager=reward_manager,
+        # reward_manager=reward_manager,
         # reward_lose=-5, # not effective when reward manager is used
         actions=MOVE_ACTIONS,
         autopickup=True,
@@ -202,9 +161,6 @@ if __name__ == "__main__":
         max_episode_steps=1000000,
     )
 
-    # VISUALIZATION HERE ...
-    # env = gym.make("MiniHack-River-v0", observation_keys=("pixel", "message"))
-        
     # Visualize trained agent
     visualize(
         env, 

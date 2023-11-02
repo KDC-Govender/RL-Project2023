@@ -8,15 +8,30 @@ import numpy as np
 import cv2  # OpenCV for video creation
 import os
 import minihack
+from nle import nethack
 from pygame.locals import *
-from actor_critic_v1 import ActorCritic, format_state
+from actor_critic_v3_hierarchical_options import (
+    ActorCritic,
+    format_state,
+    DrinkPolicy,
+    PotionPolicy,
+    MessageTerminationEvent,
+    InventoryTerminationEvent,
+    map_descriptions,
+    complete_option,
+    action_index
+)
 import torch
 from nle.nethack import CompassDirection
 from custom_reward_manager import RewardManager, InventoryEvent, MessageEvent
 
-# REQUIREMENTS:
-# Ensure you have the required libraries installed by running:
-# pip install pygame opencv-python minihack
+device = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "mps"
+    if torch.backends.mps.is_available()
+    else "cpu"
+)
 
 # Function to scale an observation to a new size using Pygame
 def scale_observation(observation, new_size):
@@ -29,6 +44,7 @@ def scale_observation(observation, new_size):
         pygame.Surface: The scaled observation.
     """
     return pygame.transform.scale(observation, new_size)
+
 
 # Function to render the game observation
 def render(obs, screen, font, text_color):
@@ -53,12 +69,26 @@ def render(obs, screen, font, text_color):
     screen.blit(image_surface, (0, 0))
 
     text_surface = font.render(msg, True, text_color)
-    text_position = (window_size[0] // 2 - text_surface.get_width() // 2, window_size[1] - text_surface.get_height() - 20)
+    text_position = (
+        window_size[0] // 2 - text_surface.get_width() // 2,
+        window_size[1] - text_surface.get_height() - 20,
+    )
     screen.blit(text_surface, text_position)
     pygame.display.flip()
 
+
+def render_frame(out, screen, clock, pygame_frame_rate):
+    # Capture the current frame and save it to the video
+    pygame.image.save(screen, "temp_frame.png")
+    frame = cv2.imread("temp_frame.png")
+    out.write(frame)
+
+    clock.tick(pygame_frame_rate)
+
 # Function to record a video of agent gameplay
-def record_video(env, agent, video_filepath, pygame_frame_rate, video_frame_rate, max_timesteps):
+def record_video(
+    env, agent, video_filepath, pygame_frame_rate, video_frame_rate, max_timesteps, env_options
+):
     """
     Record a video of agent's gameplay and save it as an MP4 file.
     Args:
@@ -72,8 +102,10 @@ def record_video(env, agent, video_filepath, pygame_frame_rate, video_frame_rate
     frame_width = env.observation_space["pixel"].shape[1]
     frame_height = env.observation_space["pixel"].shape[0]
 
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(str(video_filepath), fourcc, video_frame_rate, (frame_width, frame_height))
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    out = cv2.VideoWriter(
+        str(video_filepath), fourcc, video_frame_rate, (frame_width, frame_height)
+    )
 
     pygame.init()
     screen = pygame.display.set_mode((frame_width, frame_height))
@@ -83,28 +115,46 @@ def record_video(env, agent, video_filepath, pygame_frame_rate, video_frame_rate
     done = False
     obs = env.reset()
     clock = pygame.time.Clock()
-    
+
     steps = 1
 
     while not done and steps < max_timesteps:
+        # FOR EACH STEP IN SUBPOLICY
         action = agent.act(env, obs)
-        obs, _, done, _ = env.step(action)
-        render(obs, screen, font, text_color)
-
-        # Capture the current frame and save it to the video
-        pygame.image.save(screen, "temp_frame.png")
-        frame = cv2.imread("temp_frame.png")
-        out.write(frame)
-        
-        clock.tick(pygame_frame_rate)
-        steps += 1
+        option_policy, termination_clause, max_steps = env_options[action]
+        if termination_clause is None:
+            print(option_policy)
+            obs, reward, done, info = env.step(
+                action_index(option_policy, env.actions)
+            )
+            render(obs, screen, font, text_color)
+            render_frame(out, screen, clock, pygame_frame_rate)
+            steps += 1
+            continue
+        is_complete = False
+        done = False
+        n_steps = 0
+        episode_return = 0
+        while not (is_complete or done) and n_steps < max_steps:
+            action = option_policy.select_action(env, obs)  # selected from policy
+            if action is None:
+                break
+            print(env.actions[action].name)
+            obs, reward, done, info = env.step(action)
+            is_complete = termination_clause.check_complete(env, obs)
+            episode_return += reward
+            n_steps += 1
+            render(obs, screen, font, text_color)
+            render_frame(out, screen, clock, pygame_frame_rate)
+            steps += 1
 
     out.release()  # Release the video writer
     cv2.destroyAllWindows()  # Close any OpenCV windows
     os.remove("temp_frame.png")  # Remove the temporary frame file
 
+
 # Function to visualize agent's gameplay and save it as a video
-def visualize(env, agent, pygame_frame_rate, video_frame_rate, save_dir, max_timesteps):
+def visualize(env, agent, pygame_frame_rate, video_frame_rate, save_dir, max_timesteps, env_options):
     """
     Visualize agent's gameplay and save it as a video.
     Args:
@@ -119,98 +169,98 @@ def visualize(env, agent, pygame_frame_rate, video_frame_rate, save_dir, max_tim
     video_filepath = Path(save_dir) / "video.mp4"
 
     record_video(
-        env, 
-        agent, 
-        video_filepath, 
-        pygame_frame_rate, 
-        video_frame_rate,
-        max_timesteps
+        env, agent, video_filepath, pygame_frame_rate, video_frame_rate, max_timesteps, env_options
     )
 
-class CustomPolicy:
 
+class CustomPolicy:
+    my_dict = {'':0, "floor of a room": 1, "human rogue called Agent": 1, "staircase up": 3, 'staircase down':4}
+    directions = ['107', '108', '106', '104', '117', '110', '98', '121', None]
+    obj_to_find = "staircase down"
     def __init__(self, policy_file, actions):
         modelA = ActorCritic(h_size=512, a_size=len(actions))
         optimizerA = torch.optim.Adam(modelA.parameters(), lr=0.02)
 
         checkpoint = torch.load(policy_file)
-        modelA.load_state_dict(checkpoint['model_policy'])
-        optimizerA.load_state_dict(checkpoint['optimizer'])
+        modelA.load_state_dict(checkpoint["model_policy"])
+        optimizerA.load_state_dict(checkpoint["optimizer"])
 
         modelA.eval()
-        self.policy = modelA
+        self.policy = modelA.to(device)
         self.actions = actions
 
-
     def act(self, env, next_state):
-        next_state = format_state(next_state)
-        action_probs,state_value = self.policy.forward(next_state)
+        neighbor_descriptions = env.get_neighbor_descriptions()
+        mapped_descriptions = np.array(map_descriptions(self.my_dict, neighbor_descriptions))
+        mapped_descriptions = mapped_descriptions.reshape((1,len(mapped_descriptions)))
+
+        # Choose one category to encode (e.g., 'C')
+        selected_directions = env.get_object_direction(self.obj_to_find)
+        selected_directions_encoded = np.zeros(len(self.directions), dtype=int)
+        index = self.directions.index(str(selected_directions) if selected_directions is not None else selected_directions)
+        selected_directions_encoded[index] = 1
+        selected_directions_encoded = np.array(selected_directions_encoded.reshape((1,len(selected_directions_encoded))))
+        # Get the probability distribution over actions and
+        # estimated state value function from Actor Critic network
+
+        action_probs,state_value = self.policy.forward(next_state, mapped_descriptions, selected_directions_encoded)
         distribution = torch.distributions.Categorical(action_probs)
         action = distribution.sample()
         return action.item()
 
 
 if __name__ == "__main__":
+    # ------ Setup Environment ------
 
-    MOVE_ACTIONS = tuple(CompassDirection)
-    # NAVIGATE_ACTIONS = MOVE_ACTIONS + (
-    #     nethack.Command.OPEN,
-    #     nethack.Command.KICK,
-    #     nethack.Command.SEARCH,
-    #     nethack.Command.FIGHT,
-    # )
-
-    # QUEST_ACTIONS = NAVIGATE_ACTIONS + (
-    #     nethack.Command.PICKUP,
-    #     nethack.Command.APPLY,
-    #     nethack.Command.PUTON,
-    #     nethack.Command.WEAR,
-    #     nethack.Command.QUAFF,
-    #     nethack.Command.FIRE,
-    #     nethack.Command.RUSH,
-    #     nethack.Command.ZAP,
-    # )
-
-    reward_manager = RewardManager()
-    reward_manager.add_event(InventoryEvent(1, False, True, False, inv_item="potion"))
-    reward_manager.add_event(InventoryEvent(1, False, True, False, inv_item="wand"))
-    reward_manager.add_event(MessageEvent(1, False, True, False, messages=["You start to float in the air!"]))
-    reward_manager.add_coordinate_event((0,0), reward=-5, terminal_required = False) # For Death
-    # Final Reward
-    reward_manager.add_location_event("staircase down", reward = 1000, repeatable = False, terminal_required = True, terminal_sufficient=True)
-    # reward_manager.add_coordinate_event((11,28), reward = 10, terminal_required = False)
-    # reward_manager.add_coordinate_event((11,38), reward = 10, terminal_required = False)
-
-    # Custom Rewards for long corridors at top and bottom 
-    reward_manager.add_coordinate_event((3,27), reward = -2, terminal_required = False)
-    reward_manager.add_coordinate_event((3,28), reward = -2, terminal_required = False)
-    reward_manager.add_coordinate_event((3,29), reward = -2, terminal_required = False)
-
-    reward_manager.add_coordinate_event((19,27), reward = -2, terminal_required = False)
-    reward_manager.add_coordinate_event((19,28), reward = -2, terminal_required = False)
-    reward_manager.add_coordinate_event((19,29), reward = -2, terminal_required = False)
-
-
-    env = gym.make(
-        "MiniHack-Quest-Hard-v0",
-        observation_keys=["glyphs", "pixel", "message", "pixel_crop", "glyphs_crop", "blstats", "inv_strs"],
-        reward_manager=reward_manager,
-        # reward_lose=-5, # not effective when reward manager is used
-        actions=MOVE_ACTIONS,
-        autopickup=True,
-        allow_all_modes=True,
-        max_episode_steps=1000000,
+    # Lava ENV -- extra actions needed for confirming action
+    LAVA_ACTIONS = tuple(nethack.CompassDirection) + (
+        nethack.Command.PICKUP,
+        nethack.Command.QUAFF,
+        nethack.Command.FIRE,
     )
 
-    # VISUALIZATION HERE ...
-    # env = gym.make("MiniHack-River-v0", observation_keys=("pixel", "message"))
-        
+    env = gym.make(
+        "MiniHack-LavaCross-Levitate-Potion-Pickup-Restricted-v0",
+        # des_file=des_file,
+        observation_keys=[
+            "glyphs",
+            "pixel",
+            "message",
+            "pixel_crop",
+            "glyphs_crop",
+            "blstats",
+            "inv_strs",
+        ],
+        # reward_manager=reward_manager,
+        # reward_lose=-1, # Does not work when reward manager is used
+        # actions=LAVA_ACTIONS, # Included in env.
+        autopickup=True,
+        allow_all_modes=True,  # Enables confirmation message for consuming potion
+        max_episode_steps=500,
+    )
+
+    # Option 1: Loaded policy that's trained to find and pickup a potion
+    termination_clause = InventoryTerminationEvent("potion")
+    potion_policy = PotionPolicy(
+        "./policy_potion_pickup_with_neighbours_2000.pt", tuple(nethack.CompassDirection)
+    )
+    # Option 2: Defined policy for consuming a potion in the agent's inventory
+    drink_policy = DrinkPolicy("potion")
+    levitation_message = MessageTerminationEvent(["You start to float in the air!"])
+
+    # Specify the set of Options, including the primitive actions
+    ENV_OPTIONS = [(action, None, 1) for action in env.actions] + [
+        (potion_policy, termination_clause, 20),
+        (drink_policy, levitation_message, 2),
+    ]
+
     # Visualize trained agent
     visualize(
-        env, 
-        CustomPolicy("policy_navigation_checkpoint_6000.pt", tuple(CompassDirection)),
+        env,
+        CustomPolicy("policy_potion_pickup_with_options.pt", ENV_OPTIONS),
         pygame_frame_rate=60,
         video_frame_rate=5,
         save_dir="videos",
-        max_timesteps=100000
+        max_timesteps=100000,
+        env_options=ENV_OPTIONS
     )

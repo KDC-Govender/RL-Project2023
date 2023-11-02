@@ -184,7 +184,7 @@ class ActorCritic(nn.Module):
         glyphs_t = self.relu2(glyphs_t)
         glyphs_t = self.maxpool2(glyphs_t)
 
-        # Platten the output from the final pooling layer and pass it through the fully connected layers
+        # Flatten the output from the final pooling layer and pass it through the fully connected layers
         glyphs_t = glyphs_t.reshape(glyphs_t.shape[0], -1)
         glyphs_t = self.fc1(glyphs_t)
         glyphs_t = self.relu3(glyphs_t)
@@ -237,7 +237,6 @@ def complete_option(env, option_num, next_state, env_options):
         next_state, reward, done, info = env.step(
             action_index(option_policy, env.actions)
         )
-        next_state = format_state(next_state)
         return next_state, reward, done, info, 1
     is_complete = False
     done = False
@@ -247,7 +246,6 @@ def complete_option(env, option_num, next_state, env_options):
         action = option_policy.select_action(env, next_state)  # selected from policy
         next_state, reward, done, info = env.step(action)
         is_complete = termination_clause.check_complete(env, next_state)
-        next_state = format_state(next_state)
         episode_return += reward
         n_steps += 1
     return next_state, episode_return, done, info, n_steps
@@ -322,9 +320,6 @@ def actor_critic(env, model, seed, learning_rate, number_episodes, max_episode_l
             # Take selected action, observe the reward received, the next state
             # and whether or not the episode terminated
             next_state, reward, done, info, num_steps_taken = complete_option(env, option_num, state, env_options)
-            # env.step(action.item())
-
-            # next_state = format_state(next_state)
 
             neighbor_descriptions = env.get_neighbor_descriptions()
             mapped_descriptions = np.array(map_descriptions(my_dict, neighbor_descriptions))
@@ -351,6 +346,9 @@ def actor_critic(env, model, seed, learning_rate, number_episodes, max_episode_l
         # Store the reward acquired in the episode and calculate the discounted return of the episode
         scores.append(np.sum(rewards))
         returns = compute_returns(rewards, gamma)
+
+        log_probs = torch.from_numpy(log_probs).float().to(device)
+        state_values = torch.from_numpy(state_values).float().to(device)
         returns = torch.from_numpy(returns).float().to(device)
 
         # Print the episode, the reward acquired in the episode and the mean reward over the last 50 episodes
@@ -402,3 +400,123 @@ def run_actor_critic(env,number_episodes,max_episode_length,iterations,env_optio
 
     return policy, scores_arr, optimizer
 
+class PotionPolicy:
+    """
+    A Policy loader that reads a stored pytorch file with model and optimizer parameters.
+    
+    INPUT: The policy should be stored in a file as a dictionary with the format:
+        {"model_policy": policy, "optimizer": optimizer}
+
+    This policy loader is made specifically for detecting potions in the agent's surrounds.
+    
+    """
+    # Setup for added contextual information
+    my_dict = {
+        "": 0,
+        "floor of a room": 1,
+        "human rogue called Agent": 1,
+        "staircase up": 3,
+        "staircase down": 4,
+    }
+    directions = ["107", "108", "106", "104", "117", "110", "98", "121", None]
+    obj_to_find = "potion"
+
+    def __init__(self, policy_file, actions):
+        modelA = ActorCritic(h_size=512, a_size=len(actions))
+        optimizerA = torch.optim.Adam(modelA.parameters(), lr=0.02)
+
+        checkpoint = torch.load(policy_file)
+        modelA.load_state_dict(checkpoint["model_policy"])
+        optimizerA.load_state_dict(checkpoint["optimizer"])
+
+        modelA.eval()
+        self.policy = modelA.to(device)
+        self.actions = actions
+
+    def select_action(self, env, next_state):
+        # Adding in contextual information
+        neighbor_descriptions = env.get_neighbor_descriptions()
+        mapped_descriptions = np.array(
+            map_descriptions(self.my_dict, neighbor_descriptions)
+        )
+        mapped_descriptions = mapped_descriptions.reshape((1, len(mapped_descriptions)))
+
+        selected_directions = env.get_object_direction(self.obj_to_find)
+        selected_directions_encoded = np.zeros(len(self.directions), dtype=int)
+        index = self.directions.index(
+            str(selected_directions)
+            if selected_directions is not None
+            else selected_directions
+        )
+        selected_directions_encoded[index] = 1
+        selected_directions_encoded = np.array(
+            selected_directions_encoded.reshape((1, len(selected_directions_encoded)))
+        )
+        # Using the stored policy to generate the next set of action probabilities
+        action_probs, state_value = self.policy.forward(
+            next_state, mapped_descriptions, selected_directions_encoded
+        )
+        distribution = torch.distributions.Categorical(action_probs)
+        action = distribution.sample()
+        # print(f"Potion choosing action: {self.actions[action.item()].name}")
+        return action.item()
+
+
+class DrinkPolicy:
+    """Defined policy for confirming an action. Two steps are required to complete this Option."""
+    def __init__(self, consumable):
+        self.policy_step = 1
+        self.consumable = consumable
+
+    def select_action(self, env, observation=None):
+        # print("Trying to drink...")
+        if self.policy_step == 1:
+            self.policy_step +=1
+            return env.actions.index(nethack.Command.QUAFF)
+        else:
+            self.policy_step = 1
+            inv_key = env.key_in_inventory(self.consumable)
+            if inv_key is None:
+                # print(f"Inventory key for {self.consumable} not found in inventory...")
+                return None
+            for i, action in enumerate(env.actions):
+                if ord(inv_key) == action.value:
+                    # print(f"Acting: {env.actions[i].name}")
+                    return i
+        print(f"Confirm action '{inv_key}' not found in those available")
+        return None
+
+class InventoryTerminationEvent:
+    """An event which checks whether a specified object is in the inventory."""
+
+    def __init__(self, inv_item: str):
+        """Initialise the Event.
+        """
+        self.inv_item = inv_item
+
+    def check_complete(self, env, observation) -> float:
+        inventory_items = observation["inv_strs"]
+        for inv_item in inventory_items:
+          if self.inv_item in inv_item[: np.where(inv_item == 0)[0][0]].tobytes().decode("utf-8"):
+            return True
+        return False
+
+class MessageTerminationEvent:
+    """An event which checks whether a specified message is received."""
+
+    def __init__(self, messages: str):
+        """Initialise the Event.
+        """
+        self.messages = messages
+
+    def check_complete(self, env, observation) -> float:
+        try:
+          msg = observation["message"]
+          curr_msg = msg[: np.where(msg == 0)[0][0]].tobytes().decode("utf-8")
+          for msg in self.messages:
+              if msg in curr_msg:
+                  return True
+        except:
+          print("Failed to decode message:")
+          print(observation[env._original_observation_keys.index("message")])
+        return False

@@ -250,8 +250,6 @@ def actor_critic(env, model, seed, learning_rate, number_episodes, max_episode_l
             log_probs.append(distribution.log_prob(action))
             state_values.append(state_value)
             
-            state = next_state
-            
             if done:
                 break
         
