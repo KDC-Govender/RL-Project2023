@@ -1,4 +1,4 @@
-# https://github.com/BrentonBudler/deep-rl-minihack-the-planet/blob/main/A2C.ipynb
+# Adapted from https://github.com/BrentonBudler/deep-rl-minihack-the-planet/blob/main/A2C.ipynb
 import numpy as np
 import gym
 import minihack
@@ -17,7 +17,16 @@ import torch.nn.functional as F
 from torch import flatten
 
 from torch.nn import Linear, ReLU, CrossEntropyLoss, Sequential, Conv2d, MaxPool2d, Module, Softmax, BatchNorm2d, Dropout
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Pytorch Neural Networks
+# https://pytorch.org/tutorials/beginner/basics/buildmodel_tutorial.html
+device = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "mps"
+    if torch.backends.mps.is_available()
+    else "cpu"
+)
 
 def moving_average(a, n):
     """Calculates the moving average of an array a with a window size n"""

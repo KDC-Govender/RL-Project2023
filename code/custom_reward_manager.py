@@ -833,3 +833,34 @@ class InventoryEvent(Event):
             if self.inv_item in inv_item[: np.where(inv_item == 0)[0][0]].tobytes().decode("utf-8"):
                 return self._set_achieved()
         return 0.0
+    
+
+class RelativeCoordinate(Event):
+    """An event which checks whether a specified object is in the inventory."""
+
+    def __init__(self, *args, inv_item: str):
+        super().__init__(*args)
+        """Initialise the Event.
+
+        Args:
+            inv_item (str):
+                The name of the object to gain.
+            reward (float):
+                The reward for the event occuring
+            repeatable (bool):
+                Whether the event can occur repeated (i.e. if the reward can be
+                collected repeatedly
+            terminal_required (bool):
+                Whether this event is required for the episode to terminate.
+            terminal_sufficient (bool):
+                Whether this event causes the episode to terminate on its own.
+        """
+        self.inv_item = inv_item
+
+    def check(self, env, previous_observation, action, observation, past_cells=[]) -> float:
+        # del previous_observation, action, observation
+        inventory_items = observation[env._original_observation_keys.index("inv_strs")]
+        for inv_item in inventory_items:
+            if self.inv_item in inv_item[: np.where(inv_item == 0)[0][0]].tobytes().decode("utf-8"):
+                return self._set_achieved()
+        return 0.0
