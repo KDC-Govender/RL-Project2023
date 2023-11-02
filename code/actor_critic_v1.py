@@ -140,6 +140,8 @@ class ActorCritic(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, state):
+
+        state = format(state)
         
         # Transform the glyph and state arrays into tensors 
         glyphs_t  = torch.from_numpy(state["glyphs"]).float().to(device)
@@ -218,7 +220,7 @@ def actor_critic(env, model, seed, learning_rate, number_episodes, max_episode_l
     
     for i in range(number_episodes):
         # Reset environment
-        state = format_state(env.reset())
+        next_state = env.reset()
         # Flag to see if episode has terminated
         done = False
         
@@ -232,7 +234,7 @@ def actor_critic(env, model, seed, learning_rate, number_episodes, max_episode_l
             
             # Get the probability distribution over actions and 
             # estimated state value function from Actor Critic network 
-            action_probs,state_value = model.forward(state)
+            action_probs,state_value = model.forward(next_state)
             distribution = torch.distributions.Categorical(action_probs)
             # Sample from the probability distribution to determine which action to take 
             action = distribution.sample()
@@ -240,7 +242,7 @@ def actor_critic(env, model, seed, learning_rate, number_episodes, max_episode_l
             # Take selected action, observe the reward received, the next state 
             # and whether or not the episode terminated 
             next_state, reward, done, _ = env.step(action.item())
-            next_state = format_state(next_state)
+            # next_state = format_state(next_state)
     
             # Store the reward, log of the probability of the action selected 
             # And

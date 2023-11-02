@@ -245,11 +245,8 @@ class MessageEvent(Event):
     def check(self, env, previous_observation, action, observation, past_cells=[]) -> float:
         del previous_observation, action
         try:
-          curr_msg = (
-              observation[env._original_observation_keys.index("message")]
-              .tobytes()
-              .decode("utf-8")
-          )
+          msg = observation[env._original_observation_keys.index("message")]
+          curr_msg = msg[: np.where(msg == 0)[0][0]].tobytes().decode("utf-8")
           for msg in self.messages:
               if msg in curr_msg:
                   return self._set_achieved()
@@ -830,21 +827,18 @@ class InventoryEvent(Event):
         # del previous_observation, action, observation
         inventory_items = observation[env._original_observation_keys.index("inv_strs")]
         for inv_item in inventory_items:
-            if self.inv_item in inv_item[: np.where(inv_item == 0)[0][0]].tobytes().decode("utf-8"):
-                return self._set_achieved()
+          if self.inv_item in inv_item[: np.where(inv_item == 0)[0][0]].tobytes().decode("utf-8"):
+            return self._set_achieved()
         return 0.0
     
 
-class RelativeCoordinate(Event):
-    """An event which checks whether a specified object is in the inventory."""
+class RelativeCoordEvent(Event):
+    """An event which occurs when the agent's coordinates move relative to a start position."""
 
-    def __init__(self, *args, inv_item: str):
-        super().__init__(*args)
+    def __init__(self, *args):
         """Initialise the Event.
 
         Args:
-            inv_item (str):
-                The name of the object to gain.
             reward (float):
                 The reward for the event occuring
             repeatable (bool):
@@ -855,12 +849,15 @@ class RelativeCoordinate(Event):
             terminal_sufficient (bool):
                 Whether this event causes the episode to terminate on its own.
         """
-        self.inv_item = inv_item
+        super().__init__(*args)
+        self.current_coordinates = None
 
     def check(self, env, previous_observation, action, observation, past_cells=[]) -> float:
-        # del previous_observation, action, observation
-        inventory_items = observation[env._original_observation_keys.index("inv_strs")]
-        for inv_item in inventory_items:
-            if self.inv_item in inv_item[: np.where(inv_item == 0)[0][0]].tobytes().decode("utf-8"):
-                return self._set_achieved()
+        coordinates = tuple(observation[env._blstats_index][:2])
+        if self.current_coordinates is None:
+            self.current_coordinates = coordinates
+            return 0.0
+        if self.current_coordinates[0] < coordinates[0]:
+            self.current_coordinates = coordinates
+            return self._set_achieved()
         return 0.0
